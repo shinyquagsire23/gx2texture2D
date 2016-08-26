@@ -223,8 +223,8 @@ void render_texture(GX2Texture *render_texture, float x_pos, float y_pos, float 
     memcpy(g_tex_buffer_data, g_tex_buffer_data_temp, sizeof(g_tex_buffer_data_temp));
     memcpy(g_vertex_buffer_data, g_vertex_buffer_data_temp, sizeof(g_vertex_buffer_data_temp));
     
-    GX2Invalidate(GX2_INVALIDATE_CPU, g_tex_buffer_data, sizeof(g_tex_buffer_data_temp));
-    GX2Invalidate(GX2_INVALIDATE_CPU, g_vertex_buffer_data, sizeof(g_vertex_buffer_data_temp));
+    GX2Invalidate(GX2_INVALIDATE_CPU | GX2_INVALIDATE_ATTRIBUTE_BUFFER, g_tex_buffer_data, sizeof(g_tex_buffer_data_temp));
+    GX2Invalidate(GX2_INVALIDATE_CPU | GX2_INVALIDATE_ATTRIBUTE_BUFFER, g_vertex_buffer_data, sizeof(g_vertex_buffer_data_temp));
     
     tex_allocs[num_allocs++] = g_tex_buffer_data;
     tex_allocs[num_allocs++] = g_vertex_buffer_data;
