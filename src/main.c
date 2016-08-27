@@ -5,6 +5,7 @@
 #include <proc_ui/procui.h>
 #include <sysapp/launch.h>
 
+#include <gx2/mem.h>
 #include <gx2/draw.h>
 #include <gx2/enum.h>
 #include <gx2/swap.h>
@@ -27,16 +28,6 @@
 #include "gx2_ext.h"
 
 bool is_app_running = true;
-
-#define GX2_INVALIDATE_ATTRIBUTE_BUFFER                 0x00000001
-#define GX2_INVALIDATE_TEXTURE                          0x00000002
-#define GX2_INVALIDATE_UNIFORM_BLOCK                    0x00000004
-#define GX2_INVALIDATE_SHADER                           0x00000008
-#define GX2_INVALIDATE_COLOR_BUFFER                     0x00000010
-#define GX2_INVALIDATE_DEPTH_BUFFER                     0x00000020
-#define GX2_INVALIDATE_CPU                              0x00000040
-#define GX2_INVALIDATE_STREAM_OUT_BUFFER                0x00000080
-#define GX2_INVALIDATE_EXPORT_BUFFER                    0x00000100
 
 #define TARGET_WIDTH (1920)
 #define TARGET_HEIGHT (1080)
@@ -72,11 +63,6 @@ bool initialized = false;
 
 void *texture2DData;
 
-//TODO: Add these to wut
-void (*GX2Flush)(void);
-void (*GX2Invalidate)(int buf_type, void *addr, int length);
-void (*GX2CalcColorBufferAuxInfo)(GX2ColorBuffer *colorBuffer, u32 *size, u32 *align);
-
 bool scene_setup = false;
 static void setup_scene(void)
 {
@@ -90,7 +76,7 @@ static void setup_scene(void)
     vertexShader->size = 0x138;
     vertexShader->program = memalign(0x100, vertexShader->size);
     memcpy(vertexShader->program, (u8*)(texture2DData+0x24C), vertexShader->size);
-    GX2Invalidate(GX2_INVALIDATE_CPU | GX2_INVALIDATE_SHADER, vertexShader->program, vertexShader->size);
+    GX2Invalidate(GX2_INVALIDATE_MODE_CPU | GX2_INVALIDATE_MODE_SHADER, vertexShader->program, vertexShader->size);
     memcpy(&vertexShader->regs, (u8*)(texture2DData+0x40), sizeof(vertexShader->regs));
 
     vertexShader->uniformVarCount = 1;
@@ -119,7 +105,7 @@ static void setup_scene(void)
     pixelShader->size = 0x90;
     pixelShader->program = memalign(0x100, pixelShader->size);
     memcpy(pixelShader->program, (u8*)(texture2DData+0x518), pixelShader->size);
-    GX2Invalidate(GX2_INVALIDATE_CPU | GX2_INVALIDATE_SHADER, pixelShader->program, pixelShader->size);
+    GX2Invalidate(GX2_INVALIDATE_MODE_CPU | GX2_INVALIDATE_MODE_SHADER, pixelShader->program, pixelShader->size);
     memcpy(&pixelShader->regs, (u8*)(texture2DData+0x3A4), sizeof(pixelShader->regs));
 
     //Attributes
@@ -132,13 +118,13 @@ static void setup_scene(void)
     fetchShaderProgramm = memalign(0x100, shaderSize);
     fetchShader = (GX2FetchShader *) malloc(sizeof(GX2FetchShader));
     GX2InitFetchShaderEx(fetchShader, fetchShaderProgramm, 2, attributes, GX2_FETCH_SHADER_TESSELLATION_NONE, GX2_TESSELLATION_MODE_DISCRETE);
-    GX2Invalidate(GX2_INVALIDATE_CPU | GX2_INVALIDATE_SHADER, fetchShaderProgramm, shaderSize);
+    GX2Invalidate(GX2_INVALIDATE_MODE_CPU | GX2_INVALIDATE_MODE_SHADER, fetchShaderProgramm, shaderSize);
     
     //Our one texture
     GX2InitTexture(&texture, 128, 128, 1, 0, GX2_SURFACE_FORMAT_UNORM_R8_G8_B8_A8, GX2_SURFACE_DIM_TEXTURE_2D, GX2_TILE_MODE_LINEAR_ALIGNED);
     texture.surface.image = memalign(texture.surface.alignment, texture.surface.imageSize);
     memcpy(texture.surface.image, test_image, texture.surface.imageSize);
-    GX2Invalidate(GX2_INVALIDATE_CPU | GX2_INVALIDATE_TEXTURE, texture.surface.image, texture.surface.imageSize);
+    GX2Invalidate(GX2_INVALIDATE_MODE_CPU | GX2_INVALIDATE_MODE_TEXTURE, texture.surface.image, texture.surface.imageSize);
     
     scene_setup = true;
 }
@@ -223,8 +209,8 @@ void render_texture(GX2Texture *render_texture, float x_pos, float y_pos, float 
     memcpy(g_tex_buffer_data, g_tex_buffer_data_temp, sizeof(g_tex_buffer_data_temp));
     memcpy(g_vertex_buffer_data, g_vertex_buffer_data_temp, sizeof(g_vertex_buffer_data_temp));
     
-    GX2Invalidate(GX2_INVALIDATE_CPU | GX2_INVALIDATE_ATTRIBUTE_BUFFER, g_tex_buffer_data, sizeof(g_tex_buffer_data_temp));
-    GX2Invalidate(GX2_INVALIDATE_CPU | GX2_INVALIDATE_ATTRIBUTE_BUFFER, g_vertex_buffer_data, sizeof(g_vertex_buffer_data_temp));
+    GX2Invalidate(GX2_INVALIDATE_MODE_CPU | GX2_INVALIDATE_MODE_ATTRIBUTE_BUFFER, g_tex_buffer_data, sizeof(g_tex_buffer_data_temp));
+    GX2Invalidate(GX2_INVALIDATE_MODE_CPU | GX2_INVALIDATE_MODE_ATTRIBUTE_BUFFER, g_vertex_buffer_data, sizeof(g_vertex_buffer_data_temp));
     
     tex_allocs[num_allocs++] = g_tex_buffer_data;
     tex_allocs[num_allocs++] = g_vertex_buffer_data;
@@ -328,17 +314,16 @@ bool app_running()
             gx2CommandBuffer = MEM2_alloc(0x400000, 0x40);
 
             //! initialize GX2 command buffer
-            //TODO: wut needs defines for these transferred from Decaf
             u32 gx2_init_attributes[9];
-            gx2_init_attributes[0] = 1; //CommandBufferPoolBase
+            gx2_init_attributes[0] = GX2_INIT_CMD_BUF_BASE;
             gx2_init_attributes[1] = (u32)gx2CommandBuffer;
-            gx2_init_attributes[2] = 2; //CommandBufferPoolSize
+            gx2_init_attributes[2] = GX2_INIT_CMD_BUF_POOL_SIZE;
             gx2_init_attributes[3] = 0x400000;
-            gx2_init_attributes[4] = 7; //ArgC
+            gx2_init_attributes[4] = GX2_INIT_ARGC;
             gx2_init_attributes[5] = 0;
-            gx2_init_attributes[6] = 8; //ArgV
+            gx2_init_attributes[6] = GX2_INIT_ARGV;
             gx2_init_attributes[7] = 0;
-            gx2_init_attributes[8] = 0; //end
+            gx2_init_attributes[8] = GX2_INIT_END;
             GX2Init(gx2_init_attributes);
             
             //! allocate memory and setup context state TV
@@ -352,8 +337,8 @@ bool app_running()
             u32 scanBufferSize = 0;
             s32 scaleNeeded = 0;
 
-            s32 tvScanMode = GX2_TV_RENDER_MODE_WIDE_1080P; //GX2GetSystemTVScanMode(); //TODO: wut needs these functions
-            s32 drcScanMode = GX2_TV_RENDER_MODE_WIDE_1080P; //GX2GetSystemDRCScanMode();
+            s32 tvScanMode = GX2GetSystemTVScanMode();
+            s32 drcScanMode = GX2GetSystemDRCScanMode();
 
             s32 tvRenderMode;
             u32 tvWidth = 0;
@@ -361,17 +346,19 @@ bool app_running()
 
             switch(tvScanMode)
             {
-            case GX2_TV_RENDER_MODE_WIDE_480P:
+            case GX2_TV_SCAN_MODE_480I:
+            case GX2_TV_SCAN_MODE_480P:
                 tvWidth = 854;
                 tvHeight = 480;
                 tvRenderMode = GX2_TV_RENDER_MODE_WIDE_480P;
                 break;
-            case GX2_TV_RENDER_MODE_WIDE_1080P:
+            case GX2_TV_SCAN_MODE_1080I:
+            case GX2_TV_SCAN_MODE_1080P:
                 tvWidth = 1920;
                 tvHeight = 1080;
                 tvRenderMode = GX2_TV_RENDER_MODE_WIDE_1080P;
                 break;
-            case GX2_TV_RENDER_MODE_WIDE_720P:
+            case GX2_TV_SCAN_MODE_720P:
             default:
                 tvWidth = 1280;
                 tvHeight = 720;
@@ -388,46 +375,46 @@ bool app_running()
             //Allocate scan buffer for TV
             GX2CalcTVSize(tvRenderMode, surface_format, GX2_BUFFERING_MODE_DOUBLE, &scanBufferSize, &scaleNeeded);
             tvScanBuffer = MEMBucket_alloc(scanBufferSize, 0x1000);
-            GX2Invalidate(GX2_INVALIDATE_CPU, tvScanBuffer, scanBufferSize);
+            GX2Invalidate(GX2_INVALIDATE_MODE_CPU, tvScanBuffer, scanBufferSize);
             GX2SetTVBuffer(tvScanBuffer, scanBufferSize, tvRenderMode, surface_format, GX2_BUFFERING_MODE_DOUBLE);
 
             //Allocate scan buffer for DRC
             GX2CalcDRCSize(drcScanMode, surface_format, GX2_BUFFERING_MODE_DOUBLE, &scanBufferSize, &scaleNeeded);
             drcScanBuffer = MEMBucket_alloc(scanBufferSize, 0x1000);
-            GX2Invalidate(GX2_INVALIDATE_CPU, drcScanBuffer, scanBufferSize);
+            GX2Invalidate(GX2_INVALIDATE_MODE_CPU, drcScanBuffer, scanBufferSize);
             GX2SetDRCBuffer(drcScanBuffer, scanBufferSize, drcScanMode, surface_format, GX2_BUFFERING_MODE_DOUBLE);
 
             //TV color buffer
             GX2InitColorBuffer(&tvColorBuffer, GX2_SURFACE_DIM_TEXTURE_2D, tvWidth, tvHeight, 1, surface_format, tvAAMode);
             tvColorBuffer.surface.image = MEM1_alloc(tvColorBuffer.surface.imageSize, tvColorBuffer.surface.alignment);
-            GX2Invalidate(GX2_INVALIDATE_CPU, tvColorBuffer.surface.image, tvColorBuffer.surface.imageSize);
+            GX2Invalidate(GX2_INVALIDATE_MODE_CPU, tvColorBuffer.surface.image, tvColorBuffer.surface.imageSize);
 
             //TV depth buffer
             GX2InitDepthBuffer(&tvDepthBuffer, GX2_SURFACE_DIM_TEXTURE_2D, tvColorBuffer.surface.width, tvColorBuffer.surface.height, 1, GX2_SURFACE_FORMAT_FLOAT_R32, tvAAMode);
             tvDepthBuffer.surface.image = MEM1_alloc(tvDepthBuffer.surface.imageSize, tvDepthBuffer.surface.alignment);
-            GX2Invalidate(GX2_INVALIDATE_CPU, tvDepthBuffer.surface.image, tvDepthBuffer.surface.imageSize);
+            GX2Invalidate(GX2_INVALIDATE_MODE_CPU, tvDepthBuffer.surface.image, tvDepthBuffer.surface.imageSize);
 
             //TV HiZ buffer
             GX2InitDepthBufferHiZEnable(&tvDepthBuffer, true);
             GX2CalcDepthBufferHiZInfo(&tvDepthBuffer, &size, &align);
             tvDepthBuffer.hiZPtr = MEM1_alloc(size, align);
-            GX2Invalidate(GX2_INVALIDATE_CPU, tvDepthBuffer.hiZPtr, size);
+            GX2Invalidate(GX2_INVALIDATE_MODE_CPU, tvDepthBuffer.hiZPtr, size);
 
             //DRC color buffer
             GX2InitColorBuffer(&drcColorBuffer, GX2_SURFACE_DIM_TEXTURE_2D, 854, 480, 1, surface_format, drcAAMode);
             drcColorBuffer.surface.image = MEM1_alloc(drcColorBuffer.surface.imageSize, drcColorBuffer.surface.alignment);
-            GX2Invalidate(GX2_INVALIDATE_CPU, drcColorBuffer.surface.image, drcColorBuffer.surface.imageSize);
+            GX2Invalidate(GX2_INVALIDATE_MODE_CPU, drcColorBuffer.surface.image, drcColorBuffer.surface.imageSize);
 
             //DRC depth buffer
             GX2InitDepthBuffer(&drcDepthBuffer, GX2_SURFACE_DIM_TEXTURE_2D, drcColorBuffer.surface.width, drcColorBuffer.surface.height, 1, GX2_SURFACE_FORMAT_FLOAT_R32, drcAAMode);
             drcDepthBuffer.surface.image = MEM1_alloc(drcDepthBuffer.surface.imageSize, drcDepthBuffer.surface.alignment);
-            GX2Invalidate(GX2_INVALIDATE_CPU, drcDepthBuffer.surface.image, drcDepthBuffer.surface.imageSize);
+            GX2Invalidate(GX2_INVALIDATE_MODE_CPU, drcDepthBuffer.surface.image, drcDepthBuffer.surface.imageSize);
 
             //DRC HiZ buffer
             GX2InitDepthBufferHiZEnable(&drcDepthBuffer, true);
             GX2CalcDepthBufferHiZInfo(&drcDepthBuffer, &size, &align);
             drcDepthBuffer.hiZPtr = MEM1_alloc(size, align);
-            GX2Invalidate(GX2_INVALIDATE_CPU, drcDepthBuffer.hiZPtr, size);
+            GX2Invalidate(GX2_INVALIDATE_MODE_CPU, drcDepthBuffer.hiZPtr, size);
             
             //Allocate anti aliasing buffers to MEM2
             if (tvColorBuffer.surface.aa)
@@ -438,7 +425,7 @@ bool app_running()
 
                 tvColorBuffer.aaSize = auxSize;
                 memset(tvColorBuffer.aaBuffer, 0xCC, auxSize);
-                GX2Invalidate(GX2_INVALIDATE_CPU, tvColorBuffer.aaBuffer, auxSize);
+                GX2Invalidate(GX2_INVALIDATE_MODE_CPU, tvColorBuffer.aaBuffer, auxSize);
             }
 
             if (drcColorBuffer.surface.aa)
@@ -448,7 +435,7 @@ bool app_running()
                 drcColorBuffer.aaBuffer = MEM2_alloc(auxSize, auxAlign);
                 drcColorBuffer.aaSize = auxSize;
                 memset(drcColorBuffer.aaBuffer, 0xCC, auxSize);
-                GX2Invalidate(GX2_INVALIDATE_CPU, drcColorBuffer.aaBuffer, auxSize );
+                GX2Invalidate(GX2_INVALIDATE_MODE_CPU, drcColorBuffer.aaBuffer, auxSize );
             }
              
             //Set context and buffers
@@ -522,13 +509,6 @@ int main(int argc, char **argv)
    
    texture2DData = malloc(shaderSize);
    fread(texture2DData, shaderSize, sizeof(u8), texture2DFile);
-   
-   
-   uint32_t gx2_handle;
-   OSDynLoad_Acquire("gx2.rpl", &gx2_handle);
-   OSDynLoad_FindExport(gx2_handle, 0, "GX2Flush", &GX2Flush);
-   OSDynLoad_FindExport(gx2_handle, 0, "GX2Invalidate", &GX2Invalidate);
-   OSDynLoad_FindExport(gx2_handle, 0, "GX2CalcColorBufferAuxInfo", &GX2CalcColorBufferAuxInfo);
 
     int vpadError = -1;
     VPADStatus vpad;
