@@ -11,6 +11,7 @@
 #include <gx2/swap.h>
 #include <gx2/clear.h>
 #include <gx2/state.h>
+#include <gx2/event.h>
 #include <gx2/texture.h>
 #include <gx2/display.h>
 #include <gx2/context.h>
@@ -21,11 +22,13 @@
 #include <malloc.h>
 #include <string.h>
 #include <stdio.h>
+#include <unistd.h>
 
 #include "memory.h"
 #include "model.h"
 #include "gl-matrix.h"
 #include "gx2_ext.h"
+#include "draw.h"
 
 bool is_app_running = true;
 
@@ -33,12 +36,6 @@ bool is_app_running = true;
 #define TARGET_HEIGHT (1080)
 
 float box_x = 512.0f;
-
-static GX2VertexShader *vertexShader = NULL;
-static GX2PixelShader *pixelShader = NULL;
-static GX2FetchShader *fetchShader = NULL;
-static GX2AttribStream *attributes = NULL;
-void *fetchShaderProgramm;
 
 GX2Texture texture;
 
@@ -52,13 +49,6 @@ GX2DepthBuffer tvDepthBuffer;
 GX2ColorBuffer drcColorBuffer;
 GX2DepthBuffer drcDepthBuffer;
 
-static mat4_t projectionMtx;
-
-static f32 degreeX = 0.0f;
-static f32 degreeY = 0.0f;
-static f32 degreeZ = 0.0f;
-static bool manualControl = false;
-
 bool initialized = false;
 
 void *texture2DData;
@@ -70,14 +60,36 @@ static void setup_scene(void)
     
     //TODO: Better .gsh loading, all offsets and amounts are hardcoded to texture2D.gsh here
     
+    //TODO: Better .gsh loading, all offsets and amounts are hardcoded to texture2D.gsh here
+    
     vertexShader = (GX2VertexShader*) memalign(0x40, sizeof(GX2VertexShader));
     memset(vertexShader, 0, sizeof(GX2VertexShader));
     vertexShader->mode = GX2_SHADER_MODE_UNIFORM_REGISTER;
-    vertexShader->size = 0x138;
+    vertexShader->size = 0x139;
     vertexShader->program = memalign(0x100, vertexShader->size);
     memcpy(vertexShader->program, (u8*)(texture2DData+0x24C), vertexShader->size);
+    
+    //Patch in vertex colors
+    *(u32*)(vertexShader->program+(0x1C * sizeof(u8))) = 0x88048013;
+    *(u32*)(vertexShader->program+(0x20 * sizeof(u8))) = 0x01C00100;
+    *(u32*)(vertexShader->program+(0x24 * sizeof(u8))) = 0x88060014;
+    *(u32*)(vertexShader->program+(0x28 * sizeof(u8))) = 0x26000000;
+    *(u32*)(vertexShader->program+(0x2C * sizeof(u8))) = 0x000000A0;
+    *(u32*)(vertexShader->program+(0x30 * sizeof(u8))) = 0x00000000;
+    *(u32*)(vertexShader->program+(0x34 * sizeof(u8))) = 0x00002000;
+    //End patch in vertex colors
+    
     GX2Invalidate(GX2_INVALIDATE_MODE_CPU | GX2_INVALIDATE_MODE_SHADER, vertexShader->program, vertexShader->size);
     memcpy(&vertexShader->regs, (u8*)(texture2DData+0x40), sizeof(vertexShader->regs));
+    
+    //Patch in vertex colors
+    vertexShader->regs.sq_pgm_resources_vs++;
+    vertexShader->regs.spi_vs_out_config = (1 << 1); //One export, color
+    vertexShader->regs.spi_vs_out_id[0] = 0xFFFF0100;
+    vertexShader->regs.sq_vtx_semantic_clear = 0xFFFFFFF8;
+    vertexShader->regs.num_sq_vtx_semantic++;
+    vertexShader->regs.sq_vtx_semantic[2] = 2;
+    //End patch in vertex colors
 
     vertexShader->uniformVarCount = 1;
     vertexShader->uniformVars = (GX2UniformVar*) malloc(vertexShader->uniformVarCount * sizeof(GX2UniformVar));
@@ -87,7 +99,7 @@ static void setup_scene(void)
     vertexShader->uniformVars[0].offset = 0;
     vertexShader->uniformVars[0].block = -1;
 
-    vertexShader->attribVarCount = 2;
+    vertexShader->attribVarCount = 3;
     vertexShader->attribVars = (GX2AttribVar*) malloc(vertexShader->attribVarCount * sizeof(GX2AttribVar));
     vertexShader->attribVars[0].name = "a_texCoord";
     vertexShader->attribVars[0].type = GX2_SHADER_VAR_TYPE_FLOAT2;
@@ -97,27 +109,62 @@ static void setup_scene(void)
     vertexShader->attribVars[1].type = GX2_SHADER_VAR_TYPE_FLOAT3;
     vertexShader->attribVars[1].count = 0;
     vertexShader->attribVars[1].location = 0;
+    vertexShader->attribVars[2].name = "a_color";
+    vertexShader->attribVars[2].type = GX2_SHADER_VAR_TYPE_FLOAT4;
+    vertexShader->attribVars[2].count = 0;
+    vertexShader->attribVars[2].location = 2;
 
     //Pixel shader setup
     pixelShader = (GX2PixelShader*) memalign(0x40, sizeof(GX2PixelShader));
     memset(pixelShader, 0, sizeof(GX2PixelShader));
     pixelShader->mode = GX2_SHADER_MODE_UNIFORM_REGISTER;
-    pixelShader->size = 0x90;
+    pixelShader->size = 0x190;
     pixelShader->program = memalign(0x100, pixelShader->size);
     memcpy(pixelShader->program, (u8*)(texture2DData+0x518), pixelShader->size);
+    
+    
+    //Patch in vertex colors
+    memset(pixelShader->program+(0x90*sizeof(u8)), 0, 0x100);
+    *(u32*)(pixelShader->program) = 0x30000000;
+    
+    memcpy(pixelShader->program+(0x10*sizeof(u8)), pixelShader->program+(0x8*sizeof(u8)), 0x8);
+    *(u32*)(pixelShader->program+(0x8*sizeof(u8))) = 0x20000000;
+    *(u32*)(pixelShader->program+(0xC*sizeof(u8))) = 0x00000CA0;
+    
+    memcpy(pixelShader->program+(0x180*sizeof(u8)), pixelShader->program+(0x80*sizeof(u8)), 0x10);
+    memset(pixelShader->program+(0x80*sizeof(u8)), 0x0, 0x10);
+    
+    *(u32*)(pixelShader->program+(0x100*sizeof(u8))) = 0x00200000;
+    *(u32*)(pixelShader->program+(0x104*sizeof(u8))) = 0x90000000;
+    *(u32*)(pixelShader->program+(0x108*sizeof(u8))) = 0x00248000;
+    *(u32*)(pixelShader->program+(0x10C*sizeof(u8))) = 0x90000020;
+    *(u32*)(pixelShader->program+(0x110*sizeof(u8))) = 0x00280001;
+    *(u32*)(pixelShader->program+(0x114*sizeof(u8))) = 0x90000040;
+    *(u32*)(pixelShader->program+(0x118*sizeof(u8))) = 0x002C8081;
+    *(u32*)(pixelShader->program+(0x11C*sizeof(u8))) = 0x90000060;
+    //End patch in vertex colors
+    
     GX2Invalidate(GX2_INVALIDATE_MODE_CPU | GX2_INVALIDATE_MODE_SHADER, pixelShader->program, pixelShader->size);
     memcpy(&pixelShader->regs, (u8*)(texture2DData+0x3A4), sizeof(pixelShader->regs));
+    
+    //Patch in vertex colors
+    pixelShader->regs.sq_pgm_resources_ps++;
+    pixelShader->regs.spi_ps_in_control_0 |= (1<<1);
+    pixelShader->regs.num_spi_ps_input_cntl++;
+    pixelShader->regs.spi_ps_input_cntls[1] = 0x00000101;
+    //End patch in vertex colors
 
     //Attributes
-    attributes = (GX2AttribStream*) malloc(sizeof(GX2AttribStream) * 2);
+    attributes = (GX2AttribStream*) malloc(sizeof(GX2AttribStream) * 3);
     GX2InitAttribStream(&attributes[0], vertexShader->attribVars[1].location, 0, 0, GX2_ATTRIB_FORMAT_FLOAT_32_32_32);
     GX2InitAttribStream(&attributes[1], vertexShader->attribVars[0].location, 1, 0, GX2_ATTRIB_FORMAT_FLOAT_32_32);
+    GX2InitAttribStream(&attributes[2], vertexShader->attribVars[2].location, 2, 0, GX2_ATTRIB_FORMAT_FLOAT_32_32_32_32);
 
     //Fetch Shader
-    u32 shaderSize = GX2CalcFetchShaderSizeEx(2, GX2_FETCH_SHADER_TESSELLATION_NONE, GX2_TESSELLATION_MODE_DISCRETE);
+    u32 shaderSize = GX2CalcFetchShaderSizeEx(3, GX2_FETCH_SHADER_TESSELLATION_NONE, GX2_TESSELLATION_MODE_DISCRETE);
     fetchShaderProgramm = memalign(0x100, shaderSize);
     fetchShader = (GX2FetchShader *) malloc(sizeof(GX2FetchShader));
-    GX2InitFetchShaderEx(fetchShader, fetchShaderProgramm, 2, attributes, GX2_FETCH_SHADER_TESSELLATION_NONE, GX2_TESSELLATION_MODE_DISCRETE);
+    GX2InitFetchShaderEx(fetchShader, fetchShaderProgramm, 3, attributes, GX2_FETCH_SHADER_TESSELLATION_NONE, GX2_TESSELLATION_MODE_DISCRETE);
     GX2Invalidate(GX2_INVALIDATE_MODE_CPU | GX2_INVALIDATE_MODE_SHADER, fetchShaderProgramm, shaderSize);
     
     //Our one texture
@@ -147,81 +194,6 @@ void takedown_scene()
     free(fetchShader);
     
     scene_setup = false;
-}
-
-float **tex_allocs = NULL;
-int num_allocs = 0;
-
-void clean_tex_allocs()
-{
-    if(!tex_allocs)
-    {
-        tex_allocs = calloc(128, sizeof(float*));
-        return;
-    }
-    
-    for(int i = 0; i < num_allocs; i++)
-    {
-        free(tex_allocs[i]);
-    }
-    
-    num_allocs = 0;
-}
-
-void render_texture(GX2Texture *render_texture, float x_pos, float y_pos, float width, float height)
-{
-    GX2SetFetchShader(fetchShader);
-    GX2SetVertexShader(vertexShader);
-    GX2SetPixelShader(pixelShader);
-    
-    GX2SetPixelTexture(render_texture, 0);
-    
-    //Assumes that the coordinate space is 1920x1080 with 0,0 in the bottom left corner
-    float transform_x = ((x_pos / (float)TARGET_WIDTH) * 2.0f)-1.0f;
-    float transform_y = ((y_pos / (float)TARGET_HEIGHT) * 2.0f)-1.0f;
-    float transform_width = (width / (float)TARGET_WIDTH) * 2.0f;
-    float transform_height = (height / (float)TARGET_HEIGHT) * 2.0f;
-    
-    float g_tex_buffer_data_temp[] =
-    {
-         0.0f, 1.0f,
-         0.0f, 0.0f,
-         1.0f, 1.0f,
-         
-         1.0f, 0.0f,
-         1.0f, 0.0f,
-         0.0f, 1.0f,
-    };
-
-    float g_vertex_buffer_data_temp[] =
-    {
-         transform_x, transform_y, 0.0f,
-         transform_x, transform_y+transform_height, 0.0f,
-         transform_x+transform_width, transform_y, 0.0f,
-         
-         transform_x+transform_width, transform_y+transform_height, 0.0f,
-         transform_x+transform_width, transform_y, 0.0f,
-         transform_x, transform_y+transform_height, 0.0f,
-    };
-    
-    float *g_tex_buffer_data = malloc(sizeof(g_tex_buffer_data_temp));
-    float *g_vertex_buffer_data = malloc(sizeof(g_vertex_buffer_data_temp));
-    memcpy(g_tex_buffer_data, g_tex_buffer_data_temp, sizeof(g_tex_buffer_data_temp));
-    memcpy(g_vertex_buffer_data, g_vertex_buffer_data_temp, sizeof(g_vertex_buffer_data_temp));
-    
-    GX2Invalidate(GX2_INVALIDATE_MODE_CPU | GX2_INVALIDATE_MODE_ATTRIBUTE_BUFFER, g_tex_buffer_data, sizeof(g_tex_buffer_data_temp));
-    GX2Invalidate(GX2_INVALIDATE_MODE_CPU | GX2_INVALIDATE_MODE_ATTRIBUTE_BUFFER, g_vertex_buffer_data, sizeof(g_vertex_buffer_data_temp));
-    
-    tex_allocs[num_allocs++] = g_tex_buffer_data;
-    tex_allocs[num_allocs++] = g_vertex_buffer_data;
-    
-    unsigned int vtxCount = sizeof(g_vertex_buffer_data_temp) / (sizeof(float) * 3);
-    
-    GX2SetAttribBuffer(1, sizeof(g_tex_buffer_data_temp), sizeof(f32) * 2, g_tex_buffer_data);
-    GX2SetAttribBuffer(0, sizeof(g_vertex_buffer_data_temp), sizeof(f32) * 3, g_vertex_buffer_data);
-    GX2SetVertexUniformReg(vertexShader->uniformVars[0].offset, 16, projectionMtx);
-
-    GX2DrawEx(GX2_PRIMITIVE_MODE_TRIANGLE_STRIP, vtxCount, 0, 1);
 }
 
 bool mem1_freed = false;
@@ -335,7 +307,7 @@ bool app_running()
             GX2SetupContextStateEx(drcContextState, true);
 
             u32 scanBufferSize = 0;
-            s32 scaleNeeded = 0;
+            u32 scaleNeeded = 0;
 
             s32 tvScanMode = GX2GetSystemTVScanMode();
             s32 drcScanMode = GX2GetSystemDRCScanMode();
@@ -469,7 +441,8 @@ void prepare_render(GX2ColorBuffer * currColorBuffer, GX2DepthBuffer * currDepth
     GX2SetViewport(0.0f, 0.0f, currColorBuffer->surface.width, currColorBuffer->surface.height, 0.0f, 1.0f);
     GX2SetScissor(0, 0, currColorBuffer->surface.width, currColorBuffer->surface.height);
 
-    GX2SetDepthOnlyControl(true, true, GX2_COMPARE_FUNC_LESS);
+    GX2SetAlphaTest(true, GX2_COMPARE_FUNC_GREATER, 0.0f);
+    GX2SetDepthOnlyControl(false, false, GX2_COMPARE_FUNC_NEVER);
     GX2SetColorControl(GX2_LOGIC_OP_COPY, 0xFF, false, true);
     GX2SetBlendControl(GX2_RENDER_TARGET_0, GX2_BLEND_MODE_SRC_ALPHA, GX2_BLEND_MODE_INV_SRC_ALPHA, GX2_BLEND_COMBINE_MODE_ADD, true, GX2_BLEND_MODE_SRC_ALPHA, GX2_BLEND_MODE_INV_SRC_ALPHA, GX2_BLEND_COMBINE_MODE_ADD);
 
@@ -485,8 +458,11 @@ void render()
     if(box_x > (float)TARGET_WIDTH)
         box_x = -512.0f;
     
-    render_texture(&texture, 128.0f, 128.0f, 512.0f, 512.0f);
     render_texture(&texture, box_x, 512.0f, 512.0f, 512.0f);
+    render_texture_color(&texture, 200.0f, 200.0f, 512.0f, 512.0f, 0.5f, 1.0f, 0.0f, 0.8f);
+    render_texture_color(&texture, 50.0f, 50.0f, 512.0f, 512.0f, 0.0f, 0.5f, 1.0f, 0.5f);
+    
+    
 }
 
 int main(int argc, char **argv)

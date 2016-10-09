@@ -15,7 +15,7 @@ include $(WUT_ROOT)/rules/rpl.mk
 
 TARGET   := $(notdir $(CURDIR))
 BUILD    := build
-SOURCE   := src
+SOURCE   := src src/matrix
 INCLUDE  := include
 DATA     := data
 LIBS     := -lgcc -lm -lcrt -lcoreinit -lgx2 -lvpad -lproc_ui -lsysapp
